@@ -271,53 +271,56 @@ $this->module('logger')->extend([
     return $settings;
   },
 
+  'init' => function($settings = null) use ($app) {
+    // Load translations (if any available).
+    if ($translationspath = $app->path(__DIR__ . '/config/i18n/' . $app('i18n')->locale . '.php')) {
+      $app('i18n')->load($translationspath, $app('i18n')->locale);
+    }
+
+    // Load settings (config.yaml can override db settings).
+    if (!$settings) {
+      $settings = $this->getSettings();
+    }
+
+    // Stop here if no settings (e.g. logger not configured yet) or not enabled.
+    if (!isset($settings['enabled']) || !$settings['enabled']) {
+      return;
+    }
+
+    // Set level.
+    $levels = Monolog\Logger::getLevels();
+    $level = isset($levels[$settings['level']]) ? $levels[$settings['level']] : Monolog\Logger::INFO;
+
+    // Set formatter.
+    $formatterClass = 'Monolog\Formatter\\' . $settings['formatter'];
+    $formatter = new $formatterClass(NULL, $settings['dateFormat']);
+
+    // Set handler.
+    if ($settings['handler'] == 'SyslogHandler') {
+      $handler = new Monolog\Handler\SyslogHandler($settings['syslog']['ident'], $settings['syslog']['facility'], $level);
+    }
+    else if ($settings['handler'] == 'SyslogUdpHandler') {
+      $handler = new Monolog\Handler\SyslogUdpHandler($settings['syslog']['host'], $settings['syslog']['port'], $settings['syslog']['facility'], $level, TRUE, $settings['syslog']['ident']);
+    }
+    else {
+      $path = $app->path($settings['log']['path']);
+      $file = $path . DIRECTORY_SEPARATOR . $settings['log']['filename'];
+      $handler = new Monolog\Handler\StreamHandler($file, $level);
+    }
+    $handler->setFormatter($formatter);
+    $this->log = new Monolog\Logger('cockpit');
+    $this->log->pushHandler($handler);
+    $this->enabled = TRUE;
+    $this->level = $settings['level'];
+    $this->context = $settings['context'];
+  },
+
 ]);
 
 // Initialize logging during cockpit bootstrap.
 $app->on('cockpit.bootstrap', function () use ($app) {
-
-  // Load translations (if any available).
-  if ($translationspath = $app->path(__DIR__ . '/config/i18n/' . $app('i18n')->locale . '.php')) {
-    $app('i18n')->load($translationspath, $app('i18n')->locale);
-  }
-
-  // Load settings (config.yaml can override db settings).
-  $settings = array_replace_recursive(
-    $app->storage->getKey('cockpit/options', 'logger.settings', []),
-    $app['config']['logger'] ?? []
-  );
-
-  // Stop here if no settings (e.g. logger not configured yet) or not enabled.
-  if (!isset($settings['enabled']) || !$settings['enabled']) {
-    return;
-  }
-
-  // Set level.
-  $levels = Monolog\Logger::getLevels();
-  $level = isset($levels[$settings['level']]) ? $levels[$settings['level']] : Monolog\Logger::INFO;
-
-  // Set formatter.
-  $formatterClass = 'Monolog\Formatter\\' . $settings['formatter'];
-  $formatter = new $formatterClass(NULL, $settings['dateFormat']);
-
-  // Set handler.
-  if ($settings['handler'] == 'SyslogHandler') {
-    $handler = new Monolog\Handler\SyslogHandler($settings['syslog']['ident'], $settings['syslog']['facility'], $level);
-  }
-  else if ($settings['handler'] == 'SyslogUdpHandler') {
-    $handler = new Monolog\Handler\SyslogUdpHandler($settings['syslog']['host'], $settings['syslog']['port'], $settings['syslog']['facility'], $level, TRUE, $settings['syslog']['ident']);
-  }
-  else {
-    $path = $app->path($settings['log']['path']);
-    $file = $path . DIRECTORY_SEPARATOR . $settings['log']['filename'];
-    $handler = new Monolog\Handler\StreamHandler($file, $level);
-  }
-  $handler->setFormatter($formatter);
-  $this->module('logger')->log = new Monolog\Logger('cockpit');
-  $this->module('logger')->log->pushHandler($handler);
-  $this->module('logger')->enabled = TRUE;
-  $this->module('logger')->level = $settings['level'];
-  $this->module('logger')->context = $settings['context'];
+  $settings = $this->module('logger')->getSettings();
+  $this->module('logger')->init($settings);
 
   // Act on cockpit core events.
   $events = [];
